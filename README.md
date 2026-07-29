@@ -10,16 +10,19 @@ cloud/
   main.js               Entry point Back4App loads — just requires ./functions
   package.json          npm deps for Cloud Code (axios) — installed by Back4App on deploy
   lib/
-    alpacaClient.js      Alpaca HTTP client (reads env vars, builds requests)
-    constants.js          Shared enums (order sides/types/time-in-force)
-    validation.js          requireParams / requireOneOf helpers
-    errors.js               Normalizes Alpaca errors into Parse.Error
+    httpClient.js         Shared axios request/error-wrapping factory
+    alpacaClient.js        Trading API client (paper-api.alpaca.markets)
+    alpacaDataClient.js     Market Data API client (data.alpaca.markets)
+    constants.js              Shared enums (order sides/types/time-in-force)
+    validation.js              requireParams / requireOneOf helpers
+    errors.js                   Normalizes Alpaca errors into Parse.Error
   functions/
     index.js              Requires every function module below
     account.js             getAccount, getClock, getAsset
     positions.js            getPositions, getPosition, closePosition, closeAllPositions
     orders.js                placeOrder, listOrders, getOrder, cancelOrder, cancelAllOrders
-    health.js                 hello (basic deploy sanity check)
+    marketData.js              getQuote, getQuotes
+    health.js                    hello (basic deploy sanity check)
   test/
     local-test.js         Standalone script to sanity-check credentials locally
     .env.example           Template for local testing env vars
@@ -27,9 +30,11 @@ public/
   index.html              Default Back4App landing page (unused, safe to ignore)
 ```
 
-Adding a new feature (e.g. market data, watchlists): create `cloud/functions/marketData.js`
-with its own `Parse.Cloud.define` calls, then add `require('./marketData');` to
-`cloud/functions/index.js`. Reuse `lib/` for anything shared across modules.
+Adding a new feature (e.g. watchlists): create `cloud/functions/watchlists.js`
+with its own `Parse.Cloud.define` calls, then add `require('./watchlists');` to
+`cloud/functions/index.js`. Reuse `lib/` for anything shared across modules —
+e.g. both Alpaca clients share `lib/httpClient.js` rather than duplicating
+the request/error logic.
 
 `cloud/alpaca.js` is a leftover from before this refactor — it now just
 re-exports `lib/alpacaClient.js` for safety. Delete it manually in Finder or
@@ -46,6 +51,15 @@ Settings > Environment Variables, in the Cloud Code section):
 - `TRADING_MODE` — e.g. `paper`
 
 Cloud Code reads these via `process.env`. Nothing is hardcoded.
+
+Optional (market data — only needed if you want to override the defaults):
+
+- `ALPACA_DATA_BASE_URL` — default `https://data.alpaca.markets`
+- `ALPACA_DATA_FEED` — default `iex` (free feed); use `sip` if you have that
+  subscription on Alpaca
+
+Market data reuses `ALPACA_PAPER_KEY_ID`/`ALPACA_PAPER_SECRET_KEY` — no
+separate credentials needed.
 
 ## Local development
 
@@ -104,6 +118,24 @@ All functions are called from the iOS app via the Parse SDK, e.g.
 - `cancelOrder({ orderId })`
 - `cancelAllOrders`
 
+### Market data
+
+- `getQuote({ symbol })` — latest bid/ask for one symbol
+- `getQuotes({ symbols })` — latest bid/ask for multiple symbols (array or
+  comma-separated string)
+
+There's no push/streaming layer — the app should poll these on an interval
+(e.g. every 2–5 seconds while a screen showing live prices is open). Alpaca's
+free tier rate-limits requests per key, so poll only what's on screen rather
+than every symbol you've ever looked at. `getClock` (above) already covers
+market open/closed status; poll that far less often since it barely changes.
+
+A true real-time push stream would require an always-on process holding
+Alpaca's market data websocket open — Back4App Cloud Code is request/response
+and isn't built for that. If real-time push becomes worth it later, that's a
+separate Back4App Container relaying into Parse via LiveQuery, not something
+bolted onto Cloud Code.
+
 ### Errors
 
 Alpaca error responses are normalized into `Parse.Error` with the Alpaca
@@ -112,6 +144,6 @@ raw HTTP error.
 
 ## Next steps (not yet built)
 
-- Market data (quotes/bars) if the app needs live pricing beyond order fills
 - Watchlists
 - Per-user auth, if this ever needs to support more than one person
+- Real-time streaming (see Market data note above) if polling ever isn't enough
