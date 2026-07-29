@@ -1,0 +1,10 @@
+{
+  "applications": {
+    "Trader": {
+      "applicationId": "lkViTJ3sPH14UHCHjFLbGii4hWSYw54ZA67Dct3N"
+    },
+    "_default": {
+      "link": "Trader"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "trader-cloud-code",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Back4App Cloud Code backend for Alpaca paper trading",
+  "dependencies": {
+    "axios": "^1.7.7"
+  }
+}
