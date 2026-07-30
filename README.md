@@ -123,6 +123,13 @@ All functions are called from the iOS app via the Parse SDK, e.g.
 - `getQuote({ symbol })` — latest bid/ask for one symbol
 - `getQuotes({ symbols })` — latest bid/ask for multiple symbols (array or
   comma-separated string)
+- `getIndexValues({ symbols })` — latest values for market indexes (S&P 500,
+  Nasdaq, Dow, etc.), array or comma-separated string of Alpaca's index
+  symbols (e.g. `SPX`, `DJI`, `IXIC`). This is a newer Alpaca endpoint
+  (`/v1beta1/indices/latest/values`, added June 2026) — the Cloud Code side
+  just proxies whatever Alpaca returns, but the exact response shape hasn't
+  been verified against a live call yet, so treat the first real response as
+  the source of truth rather than assuming a shape.
 
 There's no push/streaming layer — the app should poll these on an interval
 (e.g. every 2–5 seconds while a screen showing live prices is open). Alpaca's

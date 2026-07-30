@@ -58,3 +58,31 @@ Parse.Cloud.define('getQuotes', async (request) => {
     handleAlpacaError(err);
   }
 });
+
+/**
+ * Latest index values (S&P 500, Nasdaq, Dow, etc.) — Alpaca added this
+ * endpoint in June 2026 (GET /v1beta1/indices/latest/values), separate
+ * from stock quotes since indexes aren't tradable equities. This just
+ * proxies whatever Alpaca returns, so the response shape isn't reshaped
+ * or assumed here — only the iOS-side model needs to match Alpaca's
+ * actual field names, and that hasn't been verified against a live
+ * response yet. Index symbols are Alpaca's own (e.g. SPX, DJI, IXIC) —
+ * confirm exact symbols against Alpaca's docs/dashboard.
+ */
+Parse.Cloud.define('getIndexValues', async (request) => {
+  requireParams(request, ['symbols']);
+  const symbolList = parseSymbols(request.params.symbols);
+  if (symbolList.length === 0) {
+    throw new Parse.Error(
+      Parse.Error.INVALID_JSON,
+      'symbols must be a non-empty array or comma-separated string.'
+    );
+  }
+  try {
+    return await alpacaDataRequest('GET', '/v1beta1/indices/latest/values', {
+      params: { index_symbols: symbolList.join(',') },
+    });
+  } catch (err) {
+    handleAlpacaError(err);
+  }
+});
