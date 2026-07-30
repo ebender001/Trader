@@ -51,3 +51,74 @@ struct SingleQuoteResponse: Codable, Hashable {
 struct MultiQuoteResponse: Codable, Hashable {
     let quotes: [String: QuoteData]
 }
+
+// MARK: - Index values
+
+struct IndexValueData: Codable, Hashable {
+    let symbol: String?
+    let value: Double?
+    let timestamp: String?
+
+    enum CodingKeys: String, CodingKey {
+        case symbol
+        case indexSymbol = "index_symbol"
+        case value
+        case shortValue = "v"
+        case timestamp = "t"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        symbol = try container.decodeIfPresent(String.self, forKey: .symbol) ??
+            container.decodeIfPresent(String.self, forKey: .indexSymbol)
+        value = try container.decodeIfPresent(Double.self, forKey: .value) ??
+            container.decodeIfPresent(Double.self, forKey: .shortValue)
+        timestamp = try container.decodeIfPresent(String.self, forKey: .timestamp)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(symbol, forKey: .symbol)
+        try container.encodeIfPresent(value, forKey: .value)
+        try container.encodeIfPresent(timestamp, forKey: .timestamp)
+    }
+}
+
+struct IndexValuesResponse: Codable, Hashable {
+    let indexValues: [String: IndexValueData]
+
+    enum CodingKeys: String, CodingKey {
+        case indexValues = "index_values"
+        case values
+        case data
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        if let dictionary = try container.decodeIfPresent([String: IndexValueData].self, forKey: .indexValues) ??
+            container.decodeIfPresent([String: IndexValueData].self, forKey: .values) ??
+            container.decodeIfPresent([String: IndexValueData].self, forKey: .data) {
+            indexValues = dictionary
+            return
+        }
+
+        if let array = try container.decodeIfPresent([IndexValueData].self, forKey: .indexValues) ??
+            container.decodeIfPresent([IndexValueData].self, forKey: .values) ??
+            container.decodeIfPresent([IndexValueData].self, forKey: .data) {
+            indexValues = Dictionary(
+                uniqueKeysWithValues: array.compactMap { value in
+                    value.symbol.map { ($0, value) }
+                }
+            )
+            return
+        }
+
+        indexValues = [:]
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(indexValues, forKey: .indexValues)
+    }
+}

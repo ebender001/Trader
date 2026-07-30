@@ -181,6 +181,27 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertEqual(response.quotes["TSLA"]?.bidPrice, 244.90)
     }
 
+    func testBarsDecoding() throws {
+        let json = """
+        {
+            "bars": [
+                {"t": "2026-07-29T13:30:00Z", "o": 338.10, "h": 339.50, "l": 337.80, "c": 339.20, "v": 1250000, "n": 8421, "vw": 338.65},
+                {"t": "2026-07-29T13:31:00Z", "o": 339.20, "h": 340.00, "l": 339.00, "c": 339.85, "v": 980000, "n": 6210, "vw": 339.44}
+            ],
+            "symbol": "QQQ",
+            "next_page_token": null
+        }
+        """
+        let response = try decode(BarsResponse.self, from: json)
+        XCTAssertEqual(response.symbol, "QQQ")
+        XCTAssertEqual(response.bars.count, 2)
+        XCTAssertNil(response.nextPageToken)
+        XCTAssertEqual(response.bars.first?.open, 338.10)
+        XCTAssertEqual(response.bars.first?.close, 339.20)
+        XCTAssertEqual(response.bars.last?.tradeCount, 6210)
+        XCTAssertEqual(response.bars.last?.vwap, 339.44)
+    }
+
     // MARK: - Helper
 
     private func decode<T: Decodable>(_ type: T.Type, from json: String) throws -> T {

@@ -8,3 +8,4 @@ require('./account');
 require('./positions');
 require('./orders');
 require('./marketData');
+require('./advisor');

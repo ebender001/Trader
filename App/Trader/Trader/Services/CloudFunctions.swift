@@ -143,3 +143,29 @@ struct GetQuotesFunction: ParseCloudable {
     var functionJobName = "getQuotes"
     var symbols: String
 }
+
+/// NOTE: same caveat as the two batch endpoints above — Alpaca's
+/// /v1beta1/indices/latest/values response shape hasn't been verified
+/// against a real call yet. IndexValuesResponse (in Quote.swift) is a
+/// best guess; check the real response and adjust the model before
+/// relying on this.
+struct GetIndexValuesFunction: ParseCloudable {
+    typealias ReturnType = IndexValuesResponse
+    var functionJobName = "getIndexValues"
+    var symbols: String
+}
+
+/// Historical OHLCV bars for one symbol — chart data source. See
+/// Bar.swift for field details; this is a well-established, stable
+/// Alpaca endpoint (unlike indices), so the response shape here is
+/// confident, not a guess.
+struct GetBarsFunction: ParseCloudable {
+    typealias ReturnType = BarsResponse
+    var functionJobName = "getBars"
+    var symbol: String
+    var timeframe: String
+    var start: String?
+    var end: String?
+    var limit: Int?
+    var adjustment: String?
+}

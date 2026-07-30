@@ -116,4 +116,27 @@ enum TradingService {
     static func getQuotes(symbols: [String]) async throws -> MultiQuoteResponse {
         try await GetQuotesFunction(symbols: symbols.joined(separator: ",")).runFunction()
     }
+
+    /// Unverified response shape — see IndexValuesResponse in Quote.swift.
+    static func getIndexValues(symbols: [String]) async throws -> IndexValuesResponse {
+        try await GetIndexValuesFunction(symbols: symbols.joined(separator: ",")).runFunction()
+    }
+
+    static func getBars(
+        symbol: String,
+        timeframe: String,
+        start: String? = nil,
+        end: String? = nil,
+        limit: Int? = nil,
+        adjustment: String? = nil
+    ) async throws -> BarsResponse {
+        try await GetBarsFunction(
+            symbol: symbol,
+            timeframe: timeframe,
+            start: start,
+            end: end,
+            limit: limit,
+            adjustment: adjustment
+        ).runFunction()
+    }
 }

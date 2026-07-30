@@ -13,16 +13,18 @@ cloud/
     httpClient.js         Shared axios request/error-wrapping factory
     alpacaClient.js        Trading API client (paper-api.alpaca.markets)
     alpacaDataClient.js     Market Data API client (data.alpaca.markets)
-    constants.js              Shared enums (order sides/types/time-in-force)
-    validation.js              requireParams / requireOneOf helpers
-    errors.js                   Normalizes Alpaca errors into Parse.Error
+    openaiClient.js          OpenAI Chat Completions client (Structured Outputs)
+    constants.js               Shared enums (order sides/types/time-in-force)
+    validation.js               requireParams / requireOneOf helpers
+    errors.js                    Normalizes Alpaca errors into Parse.Error
   functions/
     index.js              Requires every function module below
     account.js             getAccount, getClock, getAsset
     positions.js            getPositions, getPosition, closePosition, closeAllPositions
     orders.js                placeOrder, listOrders, getOrder, cancelOrder, cancelAllOrders
-    marketData.js              getQuote, getQuotes
-    health.js                    hello (basic deploy sanity check)
+    marketData.js              getQuote, getQuotes, getIndexValues, getBars
+    advisor.js                   AI trade suggestions — see below
+    health.js                      hello (basic deploy sanity check)
   test/
     local-test.js         Standalone script to sanity-check credentials locally
     .env.example           Template for local testing env vars
@@ -60,6 +62,12 @@ Optional (market data — only needed if you want to override the defaults):
 
 Market data reuses `ALPACA_PAPER_KEY_ID`/`ALPACA_PAPER_SECRET_KEY` — no
 separate credentials needed.
+
+AI advisor (required only if you use `getTradeSuggestions`):
+
+- `OPENAI_API_KEY` — from platform.openai.com, separate billing from any
+  ChatGPT/Claude subscription — this is pay-per-token API usage
+- `OPENAI_MODEL` — optional, default `gpt-5`
 
 ## Local development
 
@@ -129,7 +137,15 @@ All functions are called from the iOS app via the Parse SDK, e.g.
   (`/v1beta1/indices/latest/values`, added June 2026) — the Cloud Code side
   just proxies whatever Alpaca returns, but the exact response shape hasn't
   been verified against a live call yet, so treat the first real response as
-  the source of truth rather than assuming a shape.
+  the source of truth rather than assuming a shape. Note: this needs a data
+  subscription beyond the free IEX tier — a bare paper account gets
+  `403 insufficient grants` on this one specifically. Index-tracking ETFs
+  (SPY/QQQ/DIA) via `getQuote`/`getBars` work fine on the free tier instead.
+- `getBars({ symbol, timeframe, start?, end?, limit?, adjustment? })` —
+  historical OHLCV bars for charts. `timeframe` examples: `1Min`, `15Min`,
+  `1Hour`, `1Day`. Uses the same `iex` feed as quotes by default, which is
+  real-time (not the 15-minute-delayed feed free accounts get on `sip`), so
+  a chart combining this with `getQuote` won't have a staleness gap.
 
 There's no push/streaming layer — the app should poll these on an interval
 (e.g. every 2–5 seconds while a screen showing live prices is open). Alpaca's
@@ -143,14 +159,52 @@ and isn't built for that. If real-time push becomes worth it later, that's a
 separate Back4App Container relaying into Parse via LiveQuery, not something
 bolted onto Cloud Code.
 
+### AI trade advisor
+
+Suggests possible trades against the paper account using OpenAI, with goals
+set by you. It never places orders itself — `placeOrder` is still the only
+thing that touches Alpaca's trading API. This is meant to be reviewed by a
+human (accept/reject), not run autonomously.
+
+- `getAdvisorProfile` — reads your current goals/parameters (or `null` if
+  none saved yet)
+- `saveAdvisorProfile({ riskTolerance, maxPositionPercent, maxOpenPositions, symbolUniverse, strategyBias?, timeHorizon?, maxSuggestionsPerRun? })`
+  — sets your goals. `riskTolerance`: `conservative` | `moderate` | `aggressive`.
+  `symbolUniverse` is the only symbols the advisor is allowed to suggest —
+  it's a hard allowlist, enforced in code, not just prompted. `maxPositionPercent`
+  caps any single position as a % of account equity. There's only ever one
+  profile (single-user app) — calling this again overwrites it.
+- `getTradeSuggestions` — the main call. Pulls account/positions/clock/quotes
+  for your symbol universe, asks OpenAI for structured suggestions (or
+  explicitly "nothing looks good"), then applies guardrails in code before
+  anything is saved or returned: suggested symbols outside your universe are
+  dropped, position sizes over `maxPositionPercent` are dropped, and new
+  positions beyond `maxOpenPositions` are dropped. Every run — including
+  "suggested nothing" runs — is saved to the `TradeSuggestion` class so you
+  can review history later, not just the trades you actually took.
+- `recordSuggestionDecision({ suggestionId, decision, resultingOrderId? })`
+  — mark a suggestion `accepted` or `rejected` once you've decided; pass
+  `resultingOrderId` (from `placeOrder`'s response) if you acted on it, so
+  the suggestion and the resulting order are linked for later review.
+- `listTradeSuggestions({ limit?, status? })` — suggestion history.
+
+Two Parse classes back this (created automatically the first time they're
+written to — no manual schema setup needed):
+
+- `AdvisorProfile` — your goals, one row
+- `TradeSuggestion` — every suggestion ever generated, with the profile
+  snapshot it was generated under, its status, and a link to the resulting
+  order if accepted
+
 ### Errors
 
 Alpaca error responses are normalized into `Parse.Error` with the Alpaca
 message attached, so the app can display something meaningful instead of a
-raw HTTP error.
+raw HTTP error. OpenAI errors are wrapped the same way.
 
 ## Next steps (not yet built)
 
 - Watchlists
 - Per-user auth, if this ever needs to support more than one person
 - Real-time streaming (see Market data note above) if polling ever isn't enough
+- Scheduled (rather than on-demand) advisor runs, once suggestion quality feels solid

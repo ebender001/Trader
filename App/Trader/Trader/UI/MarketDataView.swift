@@ -10,6 +10,7 @@ struct MarketDataView: View {
 
     private let trackedMarkets = MarketIndex.tracked
     private let pollInterval: Duration = .seconds(60)
+    private let chartWindow: TimeInterval = 7_200
 
     var body: some View {
         NavigationStack {
@@ -19,7 +20,7 @@ struct MarketDataView: View {
                         MarketClockSummary(clock: clock, lastUpdated: lastUpdated)
                     }
 
-                    indexChart
+                    marketCharts
 
                     VStack(spacing: 12) {
                         ForEach(trackedMarkets) { market in
@@ -37,7 +38,7 @@ struct MarketDataView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        Task { await loadMarketData() }
+                        Task { await refreshHistoricalMarketData() }
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
@@ -51,7 +52,7 @@ struct MarketDataView: View {
                 }
             }
             .task {
-                await pollMarketData()
+                await seedAndPollMarketData()
             }
             .alert("Market Data Error", isPresented: Binding(
                 get: { errorMessage != nil },
@@ -64,64 +65,65 @@ struct MarketDataView: View {
         }
     }
 
-    private var indexChart: some View {
+    private var marketCharts: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Major Index Proxies")
+            Text("Major Market ETFs")
                 .font(.headline)
 
-            Chart(samples) { sample in
-                LineMark(
-                    x: .value("Time", sample.timestamp),
-                    y: .value("Change", normalizedChangePercent(for: sample))
+            ForEach(trackedMarkets) { market in
+                MarketETFChart(
+                    market: market,
+                    samples: samples(for: market),
+                    chartStart: chartStart,
+                    chartEnd: chartEnd
                 )
-                .interpolationMethod(.catmullRom)
-                .foregroundStyle(by: .value("Index", sample.market.name))
-
-                PointMark(
-                    x: .value("Time", sample.timestamp),
-                    y: .value("Change", normalizedChangePercent(for: sample))
-                )
-                .foregroundStyle(by: .value("Index", sample.market.name))
-            }
-            .frame(height: 260)
-            .chartYAxisLabel("Change")
-            .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 4))
-            }
-            .chartYAxis {
-                AxisMarks { value in
-                    AxisGridLine()
-                    AxisValueLabel {
-                        if let percent = value.as(Double.self) {
-                            Text(TraderUIFormatting.percent(percent))
-                        }
-                    }
-                }
             }
 
-            Text("QQQ, DIA, and SPY are used as tradable proxies for Nasdaq Composite, Dow Jones Industrials, and S&P 500 because the current app cloud service exposes stock quotes.")
+            Text("QQQ, DIA, and SPY update every minute. The chart keeps the latest two hours and scrolls older samples off screen.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
     }
 
-    private func pollMarketData() async {
-        await loadMarketData()
+    private var chartEnd: Date {
+        lastUpdated ?? Date()
+    }
+
+    private var chartStart: Date {
+        chartEnd.addingTimeInterval(-chartWindow)
+    }
+
+    private func seedAndPollMarketData() async {
+        await refreshHistoricalMarketData()
 
         while !Task.isCancelled {
             do {
                 try await Task.sleep(for: pollInterval)
-                await loadMarketData()
+                await loadLatestQuoteData()
             } catch {
                 return
             }
         }
     }
 
-    private func loadMarketData() async {
+    private func refreshHistoricalMarketData() async {
         isLoading = true
         defer { isLoading = false }
 
+        do {
+            async let loadedClock = TradingService.getClock()
+            async let loadedHistoricalSamples = historicalSamples()
+            let historicalSamples = try await loadedHistoricalSamples
+            clock = try await loadedClock
+            samples = pruned(historicalSamples, at: Date())
+            await loadLatestQuoteData()
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func loadLatestQuoteData() async {
         do {
             async let loadedClock = TradingService.getClock()
             async let loadedQuotes = TradingService.getQuotes(symbols: trackedMarkets.map(\.quoteSymbol))
@@ -136,6 +138,33 @@ struct MarketDataView: View {
         }
     }
 
+    private func historicalSamples() async throws -> [MarketSample] {
+        let end = Date()
+        let start = end.addingTimeInterval(-chartWindow)
+        let startString = TraderUIFormatting.isoString(start)
+        let endString = TraderUIFormatting.isoString(end)
+
+        var loadedSamples: [MarketSample] = []
+
+        for market in trackedMarkets {
+            let response = try await TradingService.getBars(
+                symbol: market.quoteSymbol,
+                timeframe: "1Min",
+                start: startString,
+                end: endString,
+                limit: 180,
+                adjustment: "raw"
+            )
+
+            loadedSamples.append(contentsOf: response.bars.compactMap { bar in
+                guard let timestamp = TraderUIFormatting.date(from: bar.timestamp) else { return nil }
+                return MarketSample(market: market, timestamp: timestamp, value: bar.close)
+            })
+        }
+
+        return loadedSamples.sorted { $0.timestamp < $1.timestamp }
+    }
+
     private func appendSamples(from response: MultiQuoteResponse, timestamp: Date) {
         let newSamples = trackedMarkets.compactMap { market -> MarketSample? in
             guard let quote = response.quotes[market.quoteSymbol] else { return nil }
@@ -143,14 +172,23 @@ struct MarketDataView: View {
         }
 
         samples.append(contentsOf: newSamples)
-        samples = samples
-            .filter { $0.timestamp >= Date().addingTimeInterval(-7_200) }
+        samples = pruned(samples, at: timestamp)
+    }
+
+    private func pruned(_ samples: [MarketSample], at timestamp: Date) -> [MarketSample] {
+        samples
+            .filter { $0.timestamp >= timestamp.addingTimeInterval(-chartWindow) }
+            .sorted { $0.timestamp < $1.timestamp }
             .suffix(360)
             .map { $0 }
     }
 
     private func latestSample(for market: MarketIndex) -> MarketSample? {
         samples.last { $0.market == market }
+    }
+
+    private func samples(for market: MarketIndex) -> [MarketSample] {
+        samples.filter { $0.market == market }
     }
 
     private func firstSample(for market: MarketIndex) -> MarketSample? {
@@ -171,14 +209,14 @@ struct MarketDataView: View {
 private struct MarketIndex: Hashable, Identifiable {
     let name: String
     let quoteSymbol: String
-    let symbolName: String
+    let color: Color
 
     var id: String { quoteSymbol }
 
     static let tracked = [
-        MarketIndex(name: "NASDAQ Composite", quoteSymbol: "QQQ", symbolName: "QQQ"),
-        MarketIndex(name: "Dow Jones Industrials", quoteSymbol: "DIA", symbolName: "DIA"),
-        MarketIndex(name: "S&P 500", quoteSymbol: "SPY", symbolName: "SPY")
+        MarketIndex(name: "NASDAQ Composite", quoteSymbol: "QQQ", color: .blue),
+        MarketIndex(name: "Dow Jones Industrials", quoteSymbol: "DIA", color: .orange),
+        MarketIndex(name: "S&P 500", quoteSymbol: "SPY", color: .green)
     ]
 }
 
@@ -187,6 +225,83 @@ private struct MarketSample: Identifiable {
     let market: MarketIndex
     let timestamp: Date
     let value: Double
+}
+
+private struct MarketETFChart: View {
+    let market: MarketIndex
+    let samples: [MarketSample]
+    let chartStart: Date
+    let chartEnd: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(market.quoteSymbol)
+                        .font(.headline)
+                        .foregroundStyle(market.color)
+                    Text(market.name)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if let latest = samples.last {
+                    Text(TraderUIFormatting.currency(latest.value))
+                        .font(.headline.monospacedDigit())
+                }
+            }
+
+            Chart(samples) { sample in
+                BarMark(
+                    x: .value("Time", sample.timestamp),
+                    yStart: .value("Baseline", valueDomain.lowerBound),
+                    yEnd: .value("Value", sample.value)
+                )
+                .foregroundStyle(market.color)
+            }
+            .frame(height: 160)
+            .chartXScale(domain: chartStart...chartEnd)
+            .chartYScale(domain: valueDomain)
+            .chartYAxisLabel("Value")
+            .chartXAxis {
+                AxisMarks(values: .automatic(desiredCount: 4))
+            }
+            .chartYAxis {
+                AxisMarks { value in
+                    AxisGridLine()
+                    AxisValueLabel {
+                        if let value = value.as(Double.self) {
+                            Text(TraderUIFormatting.currency(value))
+                        }
+                    }
+                }
+            }
+            .overlay {
+                if samples.isEmpty {
+                    ContentUnavailableView("No \(market.quoteSymbol) Samples", systemImage: "chart.bar", description: Text("Samples will appear after the next refresh."))
+                }
+            }
+        }
+        .padding()
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(.quaternary)
+        )
+    }
+
+    private var valueDomain: ClosedRange<Double> {
+        let values = samples.map(\.value)
+        guard let minimumValue = values.min(), let maximumValue = values.max() else {
+            return 0...1
+        }
+
+        let span = maximumValue - minimumValue
+        let padding = max(span * 0.15, max(maximumValue * 0.0025, 0.01))
+        return (minimumValue - padding)...(maximumValue + padding)
+    }
 }
 
 private struct MarketClockSummary: View {
@@ -214,7 +329,7 @@ private struct MarketClockSummary: View {
                     Text("Next Open")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(clock.nextOpen)
+                    Text(TraderUIFormatting.dateTime(clock.nextOpen))
                         .font(.subheadline)
                         .lineLimit(1)
                 }
@@ -225,7 +340,7 @@ private struct MarketClockSummary: View {
                     Text("Next Close")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(clock.nextClose)
+                    Text(TraderUIFormatting.dateTime(clock.nextClose))
                         .font(.subheadline)
                         .lineLimit(1)
                 }
@@ -246,7 +361,7 @@ private struct MarketIndexRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(market.name)
                     .font(.headline)
-                Text(market.symbolName)
+                Text(market.quoteSymbol)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

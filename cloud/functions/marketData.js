@@ -86,3 +86,37 @@ Parse.Cloud.define('getIndexValues', async (request) => {
     handleAlpacaError(err);
   }
 });
+
+/**
+ * Historical OHLCV bars for a single symbol — the data source for
+ * scrolling/candlestick charts. Defaults to the free `iex` feed (same
+ * as quotes above), which is real-time, not the 15-minute-delayed SIP
+ * feed free accounts get otherwise — so a chart built from this plus
+ * getQuote for the latest tick won't have a staleness gap between them.
+ *
+ * timeframe examples: "1Min", "15Min", "1Hour", "1Day".
+ * start/end are ISO 8601 date or datetime strings (e.g. "2026-06-01" or
+ * "2026-06-01T00:00:00Z"); both optional — Alpaca defaults to a recent
+ * window if omitted.
+ */
+Parse.Cloud.define('getBars', async (request) => {
+  requireParams(request, ['symbol', 'timeframe']);
+  const { symbol, timeframe, start, end, limit, adjustment } = request.params;
+  const { feed } = getConfig();
+
+  const params = { timeframe, feed };
+  if (start !== undefined) params.start = start;
+  if (end !== undefined) params.end = end;
+  if (limit !== undefined) params.limit = limit;
+  if (adjustment !== undefined) params.adjustment = adjustment;
+
+  try {
+    return await alpacaDataRequest(
+      'GET',
+      `/v2/stocks/${encodeURIComponent(symbol)}/bars`,
+      { params }
+    );
+  } catch (err) {
+    handleAlpacaError(err);
+  }
+});
